@@ -14,20 +14,19 @@ jobs:
     name: Release
     runs-on: ${{ matrix.os }}
     strategy:
-      # This prevents one OS failure from cancelling the others
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Use macos-13 (Intel) to ensure compatibility with x64 Python binaries
+        # and avoid library path issues found on macos-latest (ARM64).
+        os: [ubuntu-latest, windows-latest, macos-13]
         
     steps:
       - uses: actions/checkout@v4
 
-      # FIX: Explicitly setup Python 3.10 to avoid PyO3 version conflicts (MacOS)
-      # and execution permission errors (Windows)
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          architecture: 'x64'
+          # specific architecture removed; macos-13 will default to x64 naturally
 
       - uses: PyO3/maturin-action@v1
         with:
