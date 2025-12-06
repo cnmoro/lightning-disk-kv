@@ -1,9 +1,28 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.4"]
 build-backend = "maturin"
 
 [project]
 name = "lightning_disk_kv"
+description = "\"Disk-based redis\" - Built around LMDB and Rust, with sharding for maximum throughput"
+readme = "README.md"
 requires-python = ">=3.8"
-dependencies = ["numpy"]
-version = "0.1.0"
+authors = [
+  { name="Carlo Moro", email="cnmoro@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "numpy"
+]
+
+[project.urls]
+Repository = "https://github.com/cnmoro/lightning-disk-kv"
