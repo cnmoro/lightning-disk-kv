@@ -1,0 +1,20 @@
+[package]
+name = "lightning_disk_kv"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lightning_disk_kv"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+numpy = "0.20"
+lmdb = "0.8"
+rayon = "1.8"
+byteorder = "1.5"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
