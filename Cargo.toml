@@ -1,6 +1,6 @@
 [package]
 name = "lightning_disk_kv"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "\"Disk-based redis\" - Built around LMDB and Rust, with sharding for maximum throughput"
 license = "MIT"

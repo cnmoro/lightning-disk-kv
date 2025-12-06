@@ -2,3 +2,4 @@
 target/
 *.lock
 .other
+db_rust_test/
