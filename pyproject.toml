@@ -6,4 +6,4 @@ build-backend = "maturin"
 name = "lightning_disk_kv"
 requires-python = ">=3.8"
 dependencies = ["numpy"]
-version = "1.0"
+version = "0.1.0"

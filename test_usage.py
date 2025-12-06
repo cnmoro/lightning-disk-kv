@@ -2,6 +2,7 @@ import numpy as np
 import time
 import shutil
 import os
+import uuid
 from lightning_disk_kv import RsLmdbStorage
 
 # Clean previous runs
@@ -11,16 +12,17 @@ if os.path.exists(DB_PATH):
 
 # Initialize
 # 5 shards, 100GB map size
-storage = RsLmdbStorage(DB_PATH, num_shards=5, map_size=100 * 1024**3)
+storage = RsLmdbStorage(DB_PATH, num_shards=20, map_size=100 * 1024**3)
 
 # ---------------------------------------------------------
 # 1. Store Vectors (Fastest Path)
 # ---------------------------------------------------------
 N = 1_000_000
-DIM = 1024
+DIM = 3072
 print(f"--- Generating {N} Vectors ---")
 vec_data = np.random.rand(N, DIM).astype(np.float32)
-vec_ids = list(range(N))
+# use uuids
+vec_ids = [str(uuid.uuid4()) for _ in range(N)]
 
 print("Storing Vectors...")
 start = time.time()

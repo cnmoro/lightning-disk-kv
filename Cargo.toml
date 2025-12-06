@@ -2,6 +2,10 @@
 name = "lightning_disk_kv"
 version = "0.1.0"
 edition = "2021"
+description = "\"Disk-based redis\" - Built around LMDB and Rust, with sharding for maximum throughput"
+license = "MIT"
+repository = "https://github.com/cnmoro/lightning-disk-kv"
+readme = "README.md"
 
 [lib]
 name = "lightning_disk_kv"
@@ -13,8 +17,4 @@ numpy = "0.20"
 lmdb = "0.8"
 rayon = "1.8"
 byteorder = "1.5"
-
-[profile.release]
-lto = true
-codegen-units = 1
-opt-level = 3
+md5 = "0.7"
