@@ -42,13 +42,13 @@ struct PreparedKey {
 }
 
 #[pyclass]
-struct RsLmdbStorage {
+struct LDKV {
     shards: Vec<Arc<Environment>>,
     dbs: Vec<Database>,
     num_shards: usize,
 }
 
-impl RsLmdbStorage {
+impl LDKV {
     /// Helper to process a Python identifier (int or str) into shard index and byte key.
     /// Matches the Python logic:
     /// - Int: Little Endian 64-bit, Shard = abs(id) % N
@@ -83,7 +83,7 @@ impl RsLmdbStorage {
 }
 
 #[pymethods]
-impl RsLmdbStorage {
+impl LDKV {
     #[new]
     #[pyo3(signature = (base_path, num_shards=5, map_size=1099511627776))]
     fn new(base_path: String, num_shards: usize, map_size: usize) -> PyResult<Self> {
@@ -108,7 +108,7 @@ impl RsLmdbStorage {
             dbs.push(db);
         }
 
-        Ok(RsLmdbStorage { shards, dbs, num_shards })
+        Ok(LDKV { shards, dbs, num_shards })
     }
 
     fn store_vectors<'py>(&self, py: Python<'py>, data: PyReadonlyArray2<'py, f32>, identifiers: &PyAny) -> PyResult<()> {
@@ -130,7 +130,7 @@ impl RsLmdbStorage {
         
         for (i, id_obj) in ids_iter.enumerate() {
             let id_obj = id_obj?;
-            let key_info = RsLmdbStorage::process_key(id_obj, self.num_shards, i)?;
+            let key_info = LDKV::process_key(id_obj, self.num_shards, i)?;
             
             // Extract vector data bytes
             let row = vectors.row(i);
@@ -171,7 +171,7 @@ impl RsLmdbStorage {
         
         for (i, id_obj) in ids_iter.enumerate() {
             let id_obj = id_obj?;
-            let key_info = RsLmdbStorage::process_key(id_obj, self.num_shards, i)?;
+            let key_info = LDKV::process_key(id_obj, self.num_shards, i)?;
             buckets[key_info.shard_idx].push((i, key_info.key_bytes));
             num_items += 1;
         }
@@ -232,7 +232,7 @@ impl RsLmdbStorage {
             let id_obj = id_obj?;
             let obj = &data[i];
             
-            let key_info = RsLmdbStorage::process_key(id_obj, self.num_shards, i)?;
+            let key_info = LDKV::process_key(id_obj, self.num_shards, i)?;
             
             // Pickle dump
             let bytes_obj = dumps.call1((obj,))?;
@@ -268,7 +268,7 @@ impl RsLmdbStorage {
         
         for (i, id_obj) in ids_iter.enumerate() {
             let id_obj = id_obj?;
-            let key_info = RsLmdbStorage::process_key(id_obj, self.num_shards, i)?;
+            let key_info = LDKV::process_key(id_obj, self.num_shards, i)?;
             buckets[key_info.shard_idx].push((i, key_info.key_bytes));
             num_items += 1;
         }
@@ -321,7 +321,7 @@ impl RsLmdbStorage {
         
         for (i, id_obj) in ids_iter.enumerate() {
             let id_obj = id_obj?;
-            let key_info = RsLmdbStorage::process_key(id_obj, self.num_shards, i)?;
+            let key_info = LDKV::process_key(id_obj, self.num_shards, i)?;
             buckets[key_info.shard_idx].push(key_info.key_bytes);
         }
 
@@ -359,6 +359,6 @@ impl RsLmdbStorage {
 
 #[pymodule]
 fn lightning_disk_kv(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<RsLmdbStorage>()?;
+    m.add_class::<LDKV>()?;
     Ok(())
 }

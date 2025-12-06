@@ -1,163 +1,139 @@
-sudo apt install z3 libz3-dev
+# ⚡ lightning-disk-kv
 
-Here is a comprehensive `README.md`. It is designed to be accessible to Python developers, abstracting away the Rust complexity while explaining how to build and use the tool for maximum performance.
+This project is an absurdly fast, sharded Key-Value storage engine designed for high-throughput Python applications. 
 
-***
-
-# lightning_disk_kv: High-Performance Sharded LMDB for Python
-
-**lightning_disk_kv** is an "absurdly fast" Key-Value storage engine written in **Rust** with Python bindings. It is designed to replace slow, pure-Python LMDB implementations for a high-throughput version based on rust.
-
-It solves the **Global Interpreter Lock (GIL)** bottleneck by handling sharding, hashing, serialization, and disk I/O in parallel Rust threads.
+It is a drop-in solution for machine learning pipelines that need to store millions of embeddings (or other data type) samples efficiently. It solves the **Global Interpreter Lock (GIL)** bottleneck by offloading hashing, serialization, and disk I/O to parallel Rust threads.
 
 ### 🚀 Key Features
 
-*   **True Parallelism:** Uses `Rayon` to read/write to multiple LMDB shards simultaneously, bypassing the Python GIL.
-*   **Zero-Copy Vectors:** Directly maps NumPy arrays (`float32`) to disk without pickling overhead.
-*   **Sharded Architecture:** Automatically partitions data across multiple directories to maximize write throughput.
-*   **Hybrid Storage:** Specialized "Fast Path" for Vectors, plus a generic path for arbitrary Python objects (Strings, Dicts, Lists).
-*   **Low-Level Optimization:** Uses `WriteMap` and asynchronous flushing for maximum IOPS.
-
----
-
-## 🛠 Prerequisites
-
-To use this library, you need two things:
-1.  **Rust** (to compile the engine).
-2.  **Maturin** (to build the Python wheel).
-
-### 1. Install Rust
-If you don't have Rust installed, run this in your terminal:
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-*Restart your terminal after installation.*
-
-### 2. Install Build Tool
-Install `maturin`, the standard tool for building Rust extensions for Python:
-```bash
-pip install maturin
-```
+*   **True Parallelism:** Writes to multiple LMDB shards simultaneously using all CPU cores.
+*   **Zero-Copy Vectors:** Specialized "Fast Path" for `numpy` arrays that writes raw bytes to disk (no pickling).
+*   **Generic Storage:** Capable of storing arbitrary Python objects (Strings, Dicts, Lists) via optimized parallel pickling.
+*   **Crash Safe:** Based on LMDB (Lightning Memory-Mapped Database), offering proven reliability.
 
 ---
 
 ## 📦 Installation
 
-Clone this repository and build the package in your active Python environment.
-
+### Option A: Install via Pip (Recommended)
 ```bash
-cd lightning_disk_kv
-
-# Build and install into your current Python environment
-# IMPORTANT: The --release flag is required for performance!
-maturin develop --release
+pip install lightning_disk_kv
 ```
 
-You can now import `lightning_disk_kv` in Python just like any other library.
+### Option B: Build from Source
+If you are modifying the Rust code or building for a specific architecture:
+```bash
+# Requires Rust and Maturin
+maturin develop --release
+```
 
 ---
 
 ## ⚡ Usage Guide
 
 ### 1. Initialization
-Create an instance of the storage engine. You define the base directory and how many shards to split the data into.
+Initialize the database by specifying a base directory. The storage engine automatically handles sharding (splitting data across multiple files) to maximize write speed.
 
 ```python
-from lightning_disk_kv import RsLmdbStorage
+from lightning_disk_kv import LDKV
 
-# Initialize with 5 shards
-# map_size is the maximum database size in bytes (Virtual Memory).
-# Default is ~1TB. It does not allocate physical RAM immediately.
-db = RsLmdbStorage(
+# Initialize with 5 shards.
+# 'map_size' is the maximum virtual memory size. 
+# It does NOT consume this amount of RAM immediately.
+# Default is ~1TB, which is safe for 64-bit systems.
+db = LDKV(
     base_path="./my_database", 
     num_shards=5, 
-    map_size=100 * 1024**3  # 100 GB
+    map_size=100 * 1024**3  # 100 GB limit
 )
 ```
 
-### 2. The "Fast Path": Storing Vectors
-Use this for embeddings or numerical data. It bypasses Python's `pickle` entirely.
+### 2. Storing Vectors (The "Fast Path")
+Use `store_vectors` when dealing with Numpy embeddings. This bypasses Python's overhead entirely by reading memory directly from C-pointers.
+
 **Requirement:** Data must be `np.float32`.
 
 ```python
 import numpy as np
 
-# Generate dummy data
-ids = [1, 2, 3, 4, 5]
-vectors = np.random.rand(5, 128).astype(np.float32)
+# Create dummy data
+ids = [1, 2, 3]
+vectors = np.random.rand(3, 128).astype(np.float32)
 
-# STORE
-# This happens in parallel Rust threads
+# Store in parallel
 db.store_vectors(vectors, ids)
 
-# RETRIEVE
-# Returns a list of numpy arrays (or None if not found)
-retrieved = db.get_vectors([1, 3, 999])
+# Retrieve
+# Returns a list of numpy arrays, or None if the ID doesn't exist
+results = db.get_vectors([1, 999])
 
-print(retrieved[0].shape) # (128,)
-print(retrieved[2])       # None
+print(results[0].shape)  # (128,)
+print(results[1])        # None
 ```
 
-### 3. The "Generic Path": Storing Objects
-Use this for metadata, strings, dictionaries, or lists. It uses `pickle` internally but handles I/O in parallel.
+### 3. Storing Objects (The "Generic Path")
+Use `store_data` for strings, dictionaries, images, or lists. While this uses `pickle` internally, the serialization and disk writing happen in parallel threads, making it significantly faster than standard loops.
 
 ```python
 ids = [100, 101]
 data = [
-    "Hello World", 
+    "A simple string", 
     {"key": "value", "meta": [1, 2, 3]}
 ]
 
-# STORE
 db.store_data(data, ids)
 
-# RETRIEVE
-results = db.get_data([100, 101])
-print(results[1]['key']) # 'value'
+results = db.get_data([100])
+print(results[0]) # "A simple string"
 ```
 
-### 4. Management
-Count entries, delete items, or force a disk sync.
+### 4. Management & Syncing
 
 ```python
-# Get total count across all shards
-total = db.get_data_count()
-print(f"Total items: {total}")
+# Check total number of items across all shards
+count = db.get_data_count()
+print(f"Total items: {count}")
 
 # Delete items
 db.delete_data([1, 100])
 
 # Force flush to disk
-# (The engine uses OS buffers for speed, call this to ensure durability)
+# The engine uses OS buffers for maximum speed. 
+# Call .sync() to ensure data is physically written to the drive.
 db.sync()
 ```
 
 ---
 
-## 📊 Performance Notes
+## ⚠️ Configuration & Safety
 
-### Why is it faster?
-1.  **Python Loop Overhead:** Iterating over 1,000,000 items in Python is slow. This library pushes the loop into compiled Rust code.
-2.  **Concurrency:** A standard Python LMDB wrapper writes to one file at a time. This library writes to `num_shards` files simultaneously using all available CPU cores.
-3.  **Memory Mapping:** We use `WRITEMAP`, allowing the OS to handle writes directly to the file cache without copying memory buffers twice.
+### Understanding `map_size`
+LMDB uses a memory map. You must set `map_size` larger than the maximum data you ever intend to store. 
+*   **Don't worry about RAM:** Setting this to 1TB does not use 1TB of RAM. It simply reserves virtual address space.
+*   **Error handling:** If you exceed this limit, you will get a `MapFull` error.
 
-### Benchmarks (Typical)
-| Operation | Pure Python | lightning_disk_kv (Rust) |
-| :--- | :--- | :--- |
-| **Throughput** | ~15k items/sec | **~500k+ items/sec** |
-| **CPU Usage** | 1 Core (100%) | All Cores (High Util) |
+### Durability vs. Speed
+To achieve maximum throughput, `lightning_disk_kv` sets the `MDB_NOSYNC` flag by default.
+*   **Application Crash:** Data is safe.
+*   **OS Crash / Power Cut:** Data currently in the OS buffer (last few seconds) might be lost.
+*   **Best Practice:** If data durability is critical (e.g., you can't re-generate the data), call `db.sync()` periodically or after a large bulk insert.
 
 ---
 
-## ⚠️ Important Configuration Details
+## 🛠 Building from Source (Advanced)
 
-### `map_size`
-LMDB uses a memory map. `map_size` must be larger than the maximum data you ever intend to store. 
-*   It does **not** use physical RAM equal to `map_size`.
-*   It **does** reserve virtual address space. On 64-bit systems, you can safely set this very high (e.g., 1TB).
+If you cannot install via pip, you must compile the Rust backend manually.
 
-### Durability vs. Speed
-To achieve maximum speed, this library sets the `MDB_NOSYNC` flag.
-*   **App Crash:** Safe. No data loss.
-*   **OS Crash / Power Cut:** Data in the OS buffer might be lost.
-*   **Solution:** Call `db.sync()` manually after a large batch import if durability is critical.
+1.  **Install Rust:**
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+2.  **Install the builder:**
+    ```bash
+    pip install maturin
+    ```
+3.  **Compile:**
+    Navigate to the project root and run:
+    ```bash
+    maturin develop --release
+    ```
