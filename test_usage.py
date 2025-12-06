@@ -2,8 +2,8 @@ import numpy as np
 import time
 import shutil
 import os
-import uuid
-from lightning_disk_kv import RsLmdbStorage
+from lightning_disk_kv import LDKV
+import secrets
 
 # Clean previous runs
 DB_PATH = "./db_rust_test"
@@ -12,7 +12,7 @@ if os.path.exists(DB_PATH):
 
 # Initialize
 # 5 shards, 100GB map size
-storage = RsLmdbStorage(DB_PATH, num_shards=20, map_size=100 * 1024**3)
+storage = LDKV(DB_PATH, num_shards=20, map_size=100 * 1024**3)
 
 # ---------------------------------------------------------
 # 1. Store Vectors (Fastest Path)
@@ -21,8 +21,9 @@ N = 1_000_000
 DIM = 3072
 print(f"--- Generating {N} Vectors ---")
 vec_data = np.random.rand(N, DIM).astype(np.float32)
-# use uuids
-vec_ids = [str(uuid.uuid4()) for _ in range(N)]
+
+# generate random 64-bit integer IDs
+vec_ids = [secrets.randbits(63) for _ in range(N)]
 
 print("Storing Vectors...")
 start = time.time()

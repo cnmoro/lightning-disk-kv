@@ -10,6 +10,7 @@ It is a drop-in solution for machine learning pipelines that need to store milli
 *   **Zero-Copy Vectors:** Specialized "Fast Path" for `numpy` arrays that writes raw bytes to disk (no pickling).
 *   **Generic Storage:** Capable of storing arbitrary Python objects (Strings, Dicts, Lists) via optimized parallel pickling.
 *   **Crash Safe:** Based on LMDB (Lightning Memory-Mapped Database), offering proven reliability.
+*   **Redis Compatible:** Includes a wrapper that mimics the `redis-py` API for easy integration.
 
 ---
 
@@ -87,7 +88,31 @@ results = db.get_data([100])
 print(results[0]) # "A simple string"
 ```
 
-### 4. Management & Syncing
+### 4. Redis Compatibility API
+We provide a `redis-py` compatible wrapper. This allows you to use `lightning-disk-kv` as an embedded, persistent Redis replacement without running a separate server process.
+
+```python
+from lightning_redis import LDKV_RedisCompat
+
+# Initialize (replaces host/port with a file path)
+r = LDKV_RedisCompat(base_path="./redis_data", decode_responses=True)
+
+# Basic Key-Value
+r.set('foo', 'bar')
+print(r.get('foo'))  # 'bar'
+
+# TTL (Time To Live) - key automatically removed after 5 seconds
+r.set('temp_key', 'hidden', ex=5)
+
+# Atomic Counters
+r.incr('visitor_count', amount=1)
+
+# Hash Maps
+r.hset('user:100', mapping={'name': 'Alice', 'role': 'admin'})
+print(r.hgetall('user:100')) # {'name': 'Alice', 'role': 'admin'}
+```
+
+### 5. Management & Syncing
 
 ```python
 # Check total number of items across all shards

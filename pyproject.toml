@@ -27,3 +27,6 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/cnmoro/lightning-disk-kv"
+
+[tool.maturin]
+include = ["lightning_redis.py"]
