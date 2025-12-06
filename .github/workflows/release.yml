@@ -18,7 +18,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4  # Updated to v4
 
       - uses: PyO3/maturin-action@v1
         with:
@@ -27,9 +27,10 @@ jobs:
           manylinux: auto
       
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # Updated to v4
         with:
-          name: wheels
+          # IMPORTANT: v4 requires unique names for parallel uploads
+          name: wheels-${{ matrix.os }}
           path: dist
 
   pypi-publish:
@@ -43,9 +44,12 @@ jobs:
       id-token: write
     
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4  # Updated to v4
         with:
-          name: wheels
+          # This pattern grabs all the different OS wheels uploaded above
+          pattern: wheels-*
+          # This merges them all into the single 'dist' folder
+          merge-multiple: true
           path: dist
 
       - name: Publish to PyPI
