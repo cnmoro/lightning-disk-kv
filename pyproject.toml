@@ -7,7 +7,7 @@ name = "lightning_disk_kv"
 description = "\"Disk-based redis\" - Built around LMDB and Rust, with sharding for maximum throughput"
 readme = "README.md"
 requires-python = ">=3.8"
-version = "0.1.1"
+version = "1.0.0"
 authors = [
   { name="Carlo Moro", email="cnmoro@gmail.com" },
 ]

@@ -1,14 +1,13 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyBytes, PyNone, PyString};
-use numpy::{PyReadonlyArray2, ToPyArray};
+use numpy::{PyReadonlyArray2, PyArray1};
 use lmdb::{Environment, Transaction, WriteFlags, Database};
 use rayon::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::path::Path;
 use std::fs;
 use byteorder::{ByteOrder, LittleEndian};
 
-/// Custom error handling
 #[derive(Debug)]
 enum StorageError {
     Lmdb(lmdb::Error),
@@ -49,10 +48,6 @@ struct LDKV {
 }
 
 impl LDKV {
-    /// Helper to process a Python identifier (int or str) into shard index and byte key.
-    /// Matches the Python logic:
-    /// - Int: Little Endian 64-bit, Shard = abs(id) % N
-    /// - Str: UTF-8 Bytes, Shard = int(md5(str), 16) % N
     fn process_key(obj: &PyAny, num_shards: usize, _idx: usize) -> PyResult<PreparedKey> {
         if let Ok(val) = obj.extract::<i64>() {
             let shard_idx = (val.abs() as usize) % num_shards;
@@ -65,10 +60,7 @@ impl LDKV {
         } else if let Ok(val) = obj.downcast::<PyString>() {
             let s = val.to_string_lossy();
             let bytes = s.as_bytes();
-            
-            // Replicate Python: int(hashlib.md5(str).hexdigest(), 16) % num_shards
             let digest = md5::compute(bytes);
-            // Treat the 16-byte MD5 digest as a u128 (Big Endian per hex string standard)
             let hash_int = u128::from_be_bytes(digest.0);
             let shard_idx = (hash_int % (num_shards as u128)) as usize;
 
@@ -115,7 +107,6 @@ impl LDKV {
         let vectors = data.as_array();
         let ids_iter = identifiers.iter()?;
         
-        // Ensure lengths match (approximate check, exact check happens in iteration)
         if let Ok(len) = identifiers.len() {
             if vectors.shape()[0] != len {
                  return Err(pyo3::exceptions::PyValueError::new_err("Shape mismatch between data and identifiers"));
@@ -124,17 +115,17 @@ impl LDKV {
 
         let dim = vectors.shape()[1];
 
-        // 1. Process Keys (GIL required)
-        // We group data into buckets: bucket[shard_index] -> Vec<(key_bytes, vector_bytes)>
+        // 1. Process Keys & Copy Data (GIL required)
         let mut buckets: Vec<Vec<(Vec<u8>, Vec<u8>)>> = (0..self.num_shards).map(|_| Vec::new()).collect();
         
         for (i, id_obj) in ids_iter.enumerate() {
             let id_obj = id_obj?;
             let key_info = LDKV::process_key(id_obj, self.num_shards, i)?;
             
-            // Extract vector data bytes
             let row = vectors.row(i);
             let byte_len = dim * 4;
+            
+            // Optimization: Create vector with exact capacity and copy directly
             let mut val_bytes = Vec::with_capacity(byte_len);
             unsafe {
                 let ptr = row.as_ptr() as *const u8;
@@ -151,12 +142,13 @@ impl LDKV {
                 if batch.is_empty() { return; }
                 let env = &self.shards[shard_idx];
                 let db = self.dbs[shard_idx];
-                let mut txn = env.begin_rw_txn().unwrap();
+                
+                let mut txn = env.begin_rw_txn().expect("Failed to begin transaction");
                 
                 for (key_bytes, val_bytes) in batch {
                     let _ = txn.put(db, &key_bytes, &val_bytes, WriteFlags::empty());
                 }
-                txn.commit().unwrap();
+                txn.commit().expect("Failed to commit");
             });
             Ok(())
         })
@@ -164,10 +156,10 @@ impl LDKV {
 
     fn get_vectors<'py>(&self, py: Python<'py>, identifiers: &PyAny) -> PyResult<&'py PyList> {
         let ids_iter = identifiers.iter()?;
-        let mut num_items = 0;
-
-        // 1. Process Keys (GIL required)
+        
+        // 1. Bucket keys
         let mut buckets: Vec<Vec<(usize, Vec<u8>)>> = (0..self.num_shards).map(|_| Vec::new()).collect();
+        let mut num_items = 0;
         
         for (i, id_obj) in ids_iter.enumerate() {
             let id_obj = id_obj?;
@@ -176,38 +168,54 @@ impl LDKV {
             num_items += 1;
         }
 
-        let results = Arc::new(Mutex::new(vec![None; num_items]));
+        // Pre-allocate results with None.
+        let mut results: Vec<Option<Vec<f32>>> = vec![None; num_items];
+        
+        // POINTER SMUGGLING:
+        // Cast the raw pointer to usize (integer). Integers are Send+Sync.
+        let result_ptr_addr = results.as_mut_ptr() as usize;
 
-        // 2. Parallel Read
+        // 2. Parallel Read (No Mutex, No GIL)
         py.allow_threads(|| {
-            buckets.into_par_iter().enumerate().for_each(|(shard_idx, reqs)| {
+            buckets.into_par_iter().enumerate().for_each(move |(shard_idx, reqs)| {
                 if reqs.is_empty() { return; }
                 let env = &self.shards[shard_idx];
                 let db = self.dbs[shard_idx];
                 let txn = env.begin_ro_txn().unwrap();
 
+                // Reconstruct pointer inside thread
+                let result_ptr = result_ptr_addr as *mut Option<Vec<f32>>;
+
                 for (orig_idx, key_bytes) in reqs {
                     if let Ok(bytes) = txn.get(db, &key_bytes) {
-                        let float_count = bytes.len() / 4;
+                        let byte_len = bytes.len();
+                        let float_count = byte_len / 4;
+                        
+                        // Optimized copy that handles unaligned memory safely
                         let mut vec_f32 = Vec::with_capacity(float_count);
                         unsafe {
-                            let ptr = bytes.as_ptr() as *const f32;
-                            let slice = std::slice::from_raw_parts(ptr, float_count);
-                            vec_f32.extend_from_slice(slice);
+                            let dst_ptr = vec_f32.as_mut_ptr() as *mut u8;
+                            let src_ptr = bytes.as_ptr();
+                            // memcpy is robust against unaligned source pointers from LMDB
+                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, byte_len);
+                            vec_f32.set_len(float_count);
+                            
+                            // SAFETY: orig_idx is guaranteed unique by the single-threaded bucketing step
+                            std::ptr::write(result_ptr.add(orig_idx), Some(vec_f32));
                         }
-                        let mut res_lock = results.lock().unwrap();
-                        res_lock[orig_idx] = Some(vec_f32);
                     }
                 }
             });
         });
 
-        // 3. Convert to Python
-        let final_results = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
+        // 3. Convert to Python Objects
         let py_list = PyList::empty(py);
-        for opt in final_results {
+        for opt in results {
             match opt {
-                Some(vec) => py_list.append(vec.to_pyarray(py))?,
+                Some(vec) => {
+                    let arr = PyArray1::from_vec(py, vec);
+                    py_list.append(arr)?;
+                },
                 None => py_list.append(PyNone::get(py))?,
             }
         }
@@ -216,10 +224,11 @@ impl LDKV {
 
     fn store_data<'py>(&self, py: Python<'py>, data: Vec<PyObject>, identifiers: &PyAny) -> PyResult<()> {
         let ids_iter = identifiers.iter()?;
-        let num_ids = identifiers.len()?;
         
-        if data.len() != num_ids {
-            return Err(pyo3::exceptions::PyValueError::new_err("Length mismatch"));
+        if let Ok(len) = identifiers.len() {
+             if data.len() != len {
+                return Err(pyo3::exceptions::PyValueError::new_err("Length mismatch"));
+            }
         }
         
         let pickle = PyModule::import(py, "pickle")?;
@@ -262,10 +271,10 @@ impl LDKV {
 
     fn get_data<'py>(&self, py: Python<'py>, identifiers: &PyAny) -> PyResult<&'py PyList> {
         let ids_iter = identifiers.iter()?;
+        
+        let mut buckets: Vec<Vec<(usize, Vec<u8>)>> = (0..self.num_shards).map(|_| Vec::new()).collect();
         let mut num_items = 0;
 
-        let mut buckets: Vec<Vec<(usize, Vec<u8>)>> = (0..self.num_shards).map(|_| Vec::new()).collect();
-        
         for (i, id_obj) in ids_iter.enumerate() {
             let id_obj = id_obj?;
             let key_info = LDKV::process_key(id_obj, self.num_shards, i)?;
@@ -273,20 +282,27 @@ impl LDKV {
             num_items += 1;
         }
 
-        let results = Arc::new(Mutex::new(vec![None; num_items]));
+        // Pre-allocate results
+        let mut results: Vec<Option<Vec<u8>>> = vec![None; num_items];
+        
+        // POINTER SMUGGLING:
+        let result_ptr_addr = results.as_mut_ptr() as usize;
 
         // 1. Parallel Read
         py.allow_threads(|| {
-            buckets.into_par_iter().enumerate().for_each(|(shard_idx, reqs)| {
+            buckets.into_par_iter().enumerate().for_each(move |(shard_idx, reqs)| {
                 if reqs.is_empty() { return; }
                 let env = &self.shards[shard_idx];
                 let db = self.dbs[shard_idx];
                 let txn = env.begin_ro_txn().unwrap();
+                
+                let result_ptr = result_ptr_addr as *mut Option<Vec<u8>>;
 
                 for (orig_idx, key_bytes) in reqs {
                     if let Ok(bytes) = txn.get(db, &key_bytes) {
-                        let mut res_lock = results.lock().unwrap();
-                        res_lock[orig_idx] = Some(bytes.to_vec());
+                        unsafe {
+                            std::ptr::write(result_ptr.add(orig_idx), Some(bytes.to_vec()));
+                        }
                     }
                 }
             });
@@ -296,10 +312,9 @@ impl LDKV {
         let pickle = PyModule::import(py, "pickle")?;
         let loads = pickle.getattr("loads")?;
         
-        let final_results = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
         let py_list = PyList::empty(py);
 
-        for opt in final_results {
+        for opt in results {
             match opt {
                 Some(bytes_vec) => {
                     let py_bytes = PyBytes::new(py, &bytes_vec);
