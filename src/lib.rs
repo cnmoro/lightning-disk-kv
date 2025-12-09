@@ -318,26 +318,47 @@ impl LDKV {
         })
     }
 
-    fn keys<'py>(&self, py: Python<'py>) -> PyResult<Vec<String>> {
-        let mut all_keys = py.allow_threads(move || -> Result<Vec<String>, StorageError> {
-            let keys: Vec<String> = self.shards.par_iter().zip(&self.dbs).map(|(env, db)| {
+    fn keys<'py>(&self, py: Python<'py>) -> PyResult<&'py PyList> {
+        // 1. Collect raw key bytes from all shards in parallel
+        // We return Vec<Vec<u8>> instead of Vec<String> to defer type interpretation
+        let mut all_keys_raw = py.allow_threads(move || -> Result<Vec<Vec<u8>>, StorageError> {
+            let keys: Vec<Vec<u8>> = self.shards.par_iter().zip(&self.dbs).map(|(env, db)| {
                 let txn = env.begin_ro_txn().map_err(StorageError::Lmdb)?;
                 let mut cursor = txn.open_ro_cursor(*db).map_err(StorageError::Lmdb)?;
                 let mut shard_keys = Vec::new();
                 for (key_bytes, _) in cursor.iter() {
-                    if let Ok(key_str) = std::str::from_utf8(key_bytes) {
-                        shard_keys.push(key_str.to_string());
-                    }
+                    shard_keys.push(key_bytes.to_vec());
                 }
                 Ok(shard_keys)
-            }).collect::<Result<Vec<Vec<String>>, StorageError>>()?
+            }).collect::<Result<Vec<Vec<Vec<u8>>>, StorageError>>()?
             .into_iter()
             .flatten()
             .collect();
             Ok(keys)
         })?;
-        all_keys.sort();
-        Ok(all_keys)
+
+        // 2. Sort by byte representation to ensure deterministic output order
+        all_keys_raw.sort();
+
+        // 3. Convert to Python objects (Int or String) based on byte length
+        let py_list = PyList::empty(py);
+        
+        for key_bytes in all_keys_raw {
+            // Heuristic: process_key writes i64 as exactly 8 bytes.
+            // If the key is 8 bytes, we decode it as an integer.
+            if key_bytes.len() == 8 {
+                let val = LittleEndian::read_i64(&key_bytes);
+                py_list.append(val)?;
+            } else {
+                // Otherwise, try to decode as UTF-8 string
+                if let Ok(key_str) = std::str::from_utf8(&key_bytes) {
+                    py_list.append(key_str)?;
+                }
+                // Keys that are not 8 bytes and not valid UTF-8 are skipped
+            }
+        }
+        
+        Ok(py_list)
     }
 
     fn keys_with_prefix<'py>(&self, py: Python<'py>, prefix: String) -> PyResult<Vec<String>> {
